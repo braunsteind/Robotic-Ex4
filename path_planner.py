@@ -23,10 +23,10 @@ def get_plan(starting_location, goal_location, robot_size):
         # Create new grid by robot size and update the starting and goal location
         grid = create_occupancy_grid(response.map, robot_size)
         points = (float(response.map.info.origin.position.x), float(response.map.info.origin.position.y))
-        map = (points[0], (response.map.info.height - 1) * response.map.info.resolution + points[1])
+        my_map = (points[0], (response.map.info.height - 1) * response.map.info.resolution + points[1])
         starting_location = update_grid_location(response.map.info.resolution, robot_size, starting_location,
-                                                 map)
-        goal_location = update_grid_location(response.map.info.resolution, robot_size, goal_location, map)
+                                                 my_map)
+        goal_location = update_grid_location(response.map.info.resolution, robot_size, goal_location, my_map)
 
         flipud_grid = np.flipud(grid)
 
@@ -40,7 +40,7 @@ def get_plan(starting_location, goal_location, robot_size):
         path += [(goal_location[0], goal_location[1])]
 
         print_map_to_file(grid)
-        path2 = upgrade_grid_point(map, robot_size, path, response.map.info.resolution)
+        path2 = upgrade_grid_point(my_map, robot_size, path, response.map.info.resolution)
         print_path_to_file(starting_location, goal_location, path)
         return path2, path
 
@@ -64,10 +64,10 @@ def print_path_to_file(starting_location, goal_location, path):
         grid_file.write(" ".join(str(x) for x in goal_location))
 
 
-def update_grid_location(response, robot_size, point, map):
+def update_grid_location(response, robot_size, point, my_map):
     x, y = point
-    return [int((x - map[0]) / response / (robot_size / response)) + 1,
-            int((map[1] - y) / response / (robot_size / response)) + 1]
+    return [int((x - my_map[0]) / response / (robot_size / response)) + 1,
+            int((my_map[1] - y) / response / (robot_size / response)) + 1]
 
 
 def create_occupancy_grid(my_map, robot_size):
@@ -156,13 +156,13 @@ def prepare_path(path):
     return new_path
 
 
-def upgrade_grid_point(map, size, points, response):
+def upgrade_grid_point(my_map, size, points, response):
     points = prepare_path(points)
     prev_points = []
     for point in points:
         x, y = point
-        prev_x = round((float(x) * (size / response) * response + map[0]) * 2) / 2
-        prev_y = round((-(float(y) * (size / response) * response - map[1])) * 2) / 2
+        prev_x = round((float(x) * (size / response) * response + my_map[0]) * 2) / 2
+        prev_y = round((-(float(y) * (size / response) * response - my_map[1])) * 2) / 2
         if not (prev_x, prev_y) in prev_points:
             prev_points.append((prev_x, prev_y))
     return prev_points
