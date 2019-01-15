@@ -11,10 +11,8 @@ from nav_msgs.srv import GetMap
 import a_star
 
 
-def main():
-    rospy.init_node("navigation_node", argv=sys.argv)
-
-    starting_location, goal_location, robot_size = get_params()
+def get_plan(starting_location, goal_location, robot_size):
+    rospy.wait_for_service('static_map')
 
     try:
         get_static_map = rospy.ServiceProxy('static_map', GetMap)
@@ -24,8 +22,8 @@ def main():
 
         # Create new grid by robot size and update the starting and goal location
         grid = create_occupancy_grid(response.map, robot_size)
-        starting_location = update_grid_location(response, robot_size, starting_location)
-        goal_location = update_grid_location(response, robot_size, goal_location)
+        starting_location = update_grid_location(response.map.info.resolution, robot_size, starting_location)
+        goal_location = update_grid_location(response.map.info.resolution, robot_size, goal_location)
 
         flipud_grid = np.flipud(grid)
 
@@ -35,29 +33,37 @@ def main():
 
         # active A* algorithm
         path = a_star.PathPlanner(np.array(flipud_grid), False).a_star(np.array(starting_location),
-                                                                                      np.array(goal_location))
+                                                                       np.array(goal_location))
+        path += [(goal_location[0], goal_location[1])]
 
         print_map_to_file(grid)
-        print_path_to_file(starting_location, goal_location, path)
 
+        # TODO change
+        origin_point = (float(response.map.info.origin.position.x), float(response.map.info.origin.position.y))
+        map_origin = (origin_point[0], (response.map.info.height - 1) * response.map.info.resolution + origin_point[1])
+        path_origin_points = convert_new_grid_point(robot_size, r_path, response.map.info.resolution)
+
+        print_path_to_file(starting_location, goal_location, path)
+        return path_origin_points, path
+    
     except rospy.ServiceException, e:
         rospy.logerr("Service call failed: %s" % e)
 
 
-def get_params():
-    starting_location = 0, 0
-    goal_location = -70, -20
-    robot_size = 0.35
-
-    if rospy.has_param('/starting_location'):
-        starting_location = tuple(map(float, rospy.get_param('/starting_location').split(',')))
-    if rospy.has_param('/goal_location'):
-        goal_location = tuple(map(float, rospy.get_param('/goal_location').split(',')))
-    if rospy.has_param('/robot_size'):
-        robot_size = rospy.get_param('/robot_size')
-    rospy.wait_for_service('static_map')
-
-    return starting_location, goal_location, robot_size
+# def get_params():
+#     starting_location = 0, 0
+#     goal_location = -70, -20
+#     robot_size = 0.35
+#
+#     if rospy.has_param('/starting_location'):
+#         starting_location = tuple(map(float, rospy.get_param('/starting_location').split(',')))
+#     if rospy.has_param('/goal_location'):
+#         goal_location = tuple(map(float, rospy.get_param('/goal_location').split(',')))
+#     if rospy.has_param('/robot_size'):
+#         robot_size = rospy.get_param('/robot_size')
+#     rospy.wait_for_service('static_map')
+#
+#     return starting_location, goal_location, robot_size
 
 
 def print_map_to_file(grid):
@@ -78,9 +84,8 @@ def print_path_to_file(starting_location, goal_location, path):
 
 def update_grid_location(response, robot_size, point):
     x, y = point
-    new_x = int(math.ceil(abs((response.map.info.origin.position.x - x) / robot_size))) - 1
-    new_y = int(math.ceil(abs(((response.map.info.origin.position.y - y) / robot_size)))) - 1
-    return [new_x, new_y]
+    return [int((x - map_origin[0]) / response / (robot_size / response)) + 1,
+            int((map_origin[1] - y) / response / (robot_size / response)) + 1]
 
 
 def create_occupancy_grid(my_map, robot_size):
@@ -158,5 +163,43 @@ def calculate_steps(grid, location, direction):
         return location, sys.maxint
 
 
-if __name__ == "__main__":
-    main()
+def prepare_path(path):
+    new_path = [path[0]]
+    old = path[0]
+
+    for i, p in enumerate(path):
+        if old[0] != p[0] and old[1] != p[1]:
+            new_path.append(path[i - 1])
+            old = path[i - 1]
+
+    new_path.append(path[-1])
+    return new_path
+
+
+# TODO change name
+def convert_new_grid_point(map_origin, size, points, response):
+    """
+    Calculates new point in new grid.
+    :param size: new robot size
+    :param point: point to convert
+    :return: converted point
+    """
+    new_points = prepare_path(points)
+    old_points = []
+    for point in new_points:
+        x, y = point
+        # TODO put inside
+        old_point_x = float(x) * (size / response) * response + map_origin[0]
+        old_point_y = -(float(y) * (size / response) * response - map_origin[1])
+        old_point_x = round(old_point_x * 2) / 2
+        old_point_y = round(old_point_y * 2) / 2
+
+        if not (old_point_x, old_point_y) in old_points:
+            old_points.append((old_point_x, old_point_y))
+
+    return old_points
+
+
+def map_origin_set(origin, res, size):
+    global map_origin
+    map_origin = (origin[0], (size - 1) * res + origin[1])
