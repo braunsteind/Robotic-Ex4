@@ -1,5 +1,6 @@
 #!/usr/bin/python
-
+#
+#
 import rospy
 from tf.transformations import euler_from_quaternion
 from geometry_msgs.msg import Twist
@@ -23,7 +24,7 @@ def handle_navigate(request):
     if rounded_x == request.x and rounded_y == request.y:
         return navigateResponse(True)
     # Get path
-    path, temp = pp.get_path(robot_size, [rounded_x, rounded_y], [request.x, request.y])
+    path, temp = pp.get_plan([rounded_x, rounded_y], [request.x, request.y], robot_size)
     # Create short path
     short_path = create_short_path(path)
     # Check if start point in short path and remove it
