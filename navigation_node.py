@@ -12,7 +12,6 @@ ANGULAR_Z = 0.2
 SPEED = 0.1
 TURN = 0.1
 TURN_LOW = TURN * 0.1
-SAFE_DIST = 0.2
 DOWN = 'down'
 UP = 'up'
 LEFT = 'left'
@@ -150,7 +149,7 @@ def update_yaw(direction, publisher):
     vel_msg.angular.z = TURN_LOW * left_or_right
     if direction == UP:
         yaw = abs(yaw)
-    while not (target - threshold) < yaw and yaw < (target + threshold):
+    while not (target - threshold) < yaw < (target + threshold):
         direction = get_robot_direction()
         (trans, rot) = listener.lookupTransform("/map", "/base_footprint", rospy.Time(0))
         (roll, pitch, yaw) = euler_from_quaternion(rot)
@@ -205,8 +204,7 @@ def start_moving(path_list):
         should_set_z = False
 
         # move the robot
-        while not ((x_g - threshold < currentX and currentX < x_g + threshold) and (
-                y_g - threshold < currentY and currentY < y_g + threshold)):
+        while not ((x_g - threshold < currentX < x_g + threshold) and (y_g - threshold < currentY < y_g + threshold)):
             direction = get_robot_direction()
             if should_set_z:
                 move_msg.angular.z = ANGULAR_Z * left_or_right
@@ -247,12 +245,12 @@ def rotate(current_way, wanted_way, publisher):
     (trans, rot) = listener.lookupTransform("/map", "/base_footprint", rospy.Time(0))
     (roll, pitch, yaw) = euler_from_quaternion(rot)
     # turn until were ready to go
-    while not new_angle - threshold < yaw and yaw < new_angle + threshold:
+    while not new_angle - threshold < yaw < new_angle + threshold:
         publisher.publish(vel_msg)
         (trans, rot) = listener.lookupTransform("/map", "/base_footprint", rospy.Time(0))
         (roll, pitch, yaw) = euler_from_quaternion(rot)
         if wanted_way == UP:
-            if -3.2 <= yaw and yaw <= - 3.1:
+            if -3.2 <= yaw <= - 3.1:
                 break
 
 
