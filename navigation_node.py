@@ -11,6 +11,7 @@ from navigation_task.srv import *
 ANGULAR_Z = 0.2
 SPEED = 0.1
 TURN = 0.1
+TURN_LOW = TURN * 0.1
 SAFE_DIST = 0.2
 DOWN = 'down'
 UP = 'up'
@@ -18,7 +19,24 @@ LEFT = 'left'
 RIGHT = 'right'
 
 
-def navigationFunc(request):
+def main():
+    global robot_size, listener
+    # initialize node
+    rospy.init_node('navigation_task_node')
+    # set the parameter size
+    if rospy.has_param('/robot_size'):
+        robot_size = rospy.get_param('/robot_size')
+    else:
+        robot_size = 0.35
+    listener = tf.TransformListener()
+    rospy.Rate(2)
+    listener.waitForTransform("/map", "/base_footprint", rospy.Time(0), rospy.Duration(10.0))
+    # run
+    rospy.Service('navigate', navigate, navigation_func)
+    rospy.spin()
+
+
+def navigation_func(request):
     # get pos
     (trans, rot) = listener.lookupTransform("/map", "/base_footprint", rospy.Time(0))
     x, y = trans[0], trans[1]
@@ -54,14 +72,13 @@ def navigationFunc(request):
         # remove it
         path_list.remove((newX, newY))
 
-    mover = Mover(path_list)
-    mover.move_to_target()
+    start_moving(path_list)
 
     return navigateResponse(True)
 
 
 # converting a given direction to the relevant angle
-def dictToAngle(direction):
+def dict_to_angle(direction):
     directions = [UP, DOWN, LEFT, RIGHT]
     values = [3.1, 0, -1.57, 1.57]
 
@@ -75,7 +92,6 @@ def dictToAngle(direction):
 def get_robot_direction():
     threshold = 0.15
     (trans, rot) = listener.lookupTransform("/map", "/base_footprint", rospy.Time(0))
-    x, y = trans[0], trans[1]
     (roll, pitch, yaw) = euler_from_quaternion(rot)
     # Checks by current yaw in which direction we are
     if 0 - threshold < abs(yaw) < 0 + threshold:
@@ -87,177 +103,158 @@ def get_robot_direction():
     elif -1.5 - threshold < yaw < -1.5 + threshold:
         return LEFT
     else:
-        return 'Cant_decide'
+        return 'UNK'
 
 
-class Mover(object):
-    def __init__(self, path):
-        self.path = path
-        self.min_dist_from_obstacle = SPEED + SAFE_DIST
-        self.keep_moving = True
-        self.command_pub = rospy.Publisher("/cmd_vel_mux/input/teleop", Twist, queue_size=10)
+def update_yaw(direction, publisher):
+    threshold = 0.005
 
-    # TODO
-    def calibrate_yaw(self, direction):
-        threshold = 0.005
-        slow_turn_speed = 0.01
-
-        if direction == 'Cant_decide':
-            print 'Cant decide case calibrate'
-            (trans, rot) = listener.lookupTransform("/map", "/base_footprint", rospy.Time(0))
-            x, y = trans[0], trans[1]
-            (roll, pitch, yaw) = euler_from_quaternion(rot)
-            values = {}
-            values[DOWN] = abs(yaw - 0)
-            values[RIGHT] = abs(yaw - 1.5)
-            values[UP] = abs(abs(yaw) - 3)
-            values[LEFT] = abs(yaw + 1.5)
-            # Check min value of closest direction and calibrate to it
-            result = min(values.items(), key=lambda i: i[1])
-            direction = result[1]
-
-        wanted_val = 0
-        if direction == DOWN:
-            wanted_val = 0
-        elif direction == UP:
-            wanted_val = 3.1
-        elif direction == RIGHT:
-            wanted_val = 1.5
-        elif direction == LEFT:
-            wanted_val = -1.5
-
-        vel_msg = Twist()
-
+    # if unknown direction go to the closest direction to the target
+    if direction == 'UNK':
         (trans, rot) = listener.lookupTransform("/map", "/base_footprint", rospy.Time(0))
-        x, y = trans[0], trans[1]
         (roll, pitch, yaw) = euler_from_quaternion(rot)
-        turn_direction = 0
-        # Check which direction to turn to by current yaw
-        if yaw < wanted_val:
-            turn_direction = 1
-        elif yaw > wanted_val:
-            turn_direction = -1
+        values = {}
+        values[DOWN] = abs(yaw - 0)
+        values[RIGHT] = abs(yaw - 1.5)
+        values[UP] = abs(abs(yaw) - 3)
+        values[LEFT] = abs(yaw + 1.5)
+        result = min(values.items(), key=lambda i: i[1])
+        direction = result[1]
 
-        if direction == UP and yaw < 0:
-            turn_direction = -1
+    target = 0
+    if direction == DOWN:
+        target = 0
+    elif direction == UP:
+        target = 3.1
+    elif direction == RIGHT:
+        target = 1.5
+    elif direction == LEFT:
+        target = -1.5
 
-        if direction == UP and yaw > 0:
-            turn_direction = 1
-        # Set z value
-        vel_msg.angular.z = slow_turn_speed * turn_direction
+    vel_msg = Twist()
 
+    (trans, rot) = listener.lookupTransform("/map", "/base_footprint", rospy.Time(0))
+    (roll, pitch, yaw) = euler_from_quaternion(rot)
+    left_or_right = 0
+    # check if should turn to the left or to the right
+    if yaw < target:
+        left_or_right = 1
+    elif yaw > target:
+        left_or_right = -1
+    if direction == UP and yaw < 0:
+        left_or_right = -1
+    if direction == UP and yaw > 0:
+        left_or_right = 1
+
+    # Start turning until we are st to go to the target
+    vel_msg.angular.z = TURN_LOW * left_or_right
+    if direction == UP:
+        yaw = abs(yaw)
+    while not (target - threshold) < yaw and yaw < (target + threshold):
+        direction = get_robot_direction()
+        (trans, rot) = listener.lookupTransform("/map", "/base_footprint", rospy.Time(0))
+        (roll, pitch, yaw) = euler_from_quaternion(rot)
+        publisher.publish(vel_msg)
         if direction == UP:
             yaw = abs(yaw)
 
-        print 'Calibrating angle slowly, please wait!'
-        while not (wanted_val - threshold) < yaw < (wanted_val + threshold):
-            direction = get_robot_direction()
-            (trans, rot) = listener.lookupTransform("/map", "/base_footprint", rospy.Time(0))
-            x, y = trans[0], trans[1]
-            (roll, pitch, yaw) = euler_from_quaternion(rot)
-            self.command_pub.publish(vel_msg)
-            if direction == UP:
-                yaw = abs(yaw)
 
-    def move_to_target(self):
-        threshold = 0.08
+def start_moving(path_list):
+    """
+    start moving the robot
+    :param path_list: The path list with the points
+    """
+    publisher = rospy.Publisher("/cmd_vel_mux/input/teleop", Twist, queue_size=10)
+    threshold = 0.08
 
-        move_msg = Twist()
-        move_msg.linear.x = SPEED
-        move_msg.angular.z = ANGULAR_Z
+    move_msg = Twist()
+    move_msg.linear.x = SPEED
+    move_msg.angular.z = ANGULAR_Z
 
-        direction = get_robot_direction()
-        self.calibrate_yaw(direction)
+    direction = get_robot_direction()
+    update_yaw(direction, publisher)
 
-        for point in self.path:
-            (trans, rot) = listener.lookupTransform("/map", "/base_footprint", rospy.Time(0))
-            x, y = trans[0], trans[1]
-            (roll, pitch, yaw) = euler_from_quaternion(rot)
-            currentX, currentY, wanted_yaw = x, y, yaw
-            currentX, currentY = round(currentX * 2) / 2, round(currentY * 2) / 2
-            x_g, y_g = point
-            # set the way the robot should go
-            if currentX < x_g:
-                next_direction = DOWN
-            elif currentX > x_g:
-                next_direction = UP
-            elif currentY < y_g:
-                next_direction = RIGHT
-            elif currentY > y_g:
-                next_direction = LEFT
-
-            if next_direction != direction:
-                self.rotate(direction, next_direction)
-                direction = next_direction
-                self.calibrate_yaw(direction)
-
-            (trans, rot) = listener.lookupTransform("/map", "/base_footprint", rospy.Time(0))
-            x, y = trans[0], trans[1]
-            (roll, pitch, yaw) = euler_from_quaternion(rot)
-            currentX, currentY = x, y
-            x_g, y_g = point
-            turn_around_dir = 1
-            fix_round_move = False
-
-            while not (
-                    (x_g - threshold < currentX < x_g + threshold) and (y_g - threshold < currentY < y_g + threshold)):
-                direction = get_robot_direction()
-
-                if fix_round_move:
-                    move_msg.angular.z = ANGULAR_Z * turn_around_dir
-
-                self.command_pub.publish(move_msg)
-                (trans, rot) = listener.lookupTransform("/map", "/base_footprint", rospy.Time(0))
-                currentX, currentY = trans[0], trans[1]
-                (roll, pitch, yaw) = euler_from_quaternion(rot)
-
-                if yaw < dictToAngle(next_direction):
-                    turn_around_dir = 1
-                    fix_round_move = True
-                else:
-                    turn_around_dir = -1
-                    fix_round_move = True
-
-    def rotate(self, currentWay, wantedDirection):
-
-        threshold = 0.15
-        vel_msg = Twist()
-        goal_angle = dictToAngle(wantedDirection)
-        check_dir_move = goal_angle - dictToAngle(currentWay)
-
-        if check_dir_move < 0:
-            turn_direction = -1
-        else:
-            turn_direction = 1
-
-        vel_msg.angular.z = TURN * turn_direction
+    # go over the points in the path list
+    for point in path_list:
         (trans, rot) = listener.lookupTransform("/map", "/base_footprint", rospy.Time(0))
         x, y = trans[0], trans[1]
-        (roll, pitch, yaw) = euler_from_quaternion(rot)
+        euler_from_quaternion(rot)
+        currentX, currentY = x, y
+        currentX, currentY = round(currentX * 2) / 2, round(currentY * 2) / 2
+        x_g, y_g = point
+        # set the way the robot should go
+        if currentX < x_g:
+            goto = DOWN
+        elif currentX > x_g:
+            goto = UP
+        elif currentY < y_g:
+            goto = RIGHT
+        elif currentY > y_g:
+            goto = LEFT
 
-        while not goal_angle - threshold < yaw < goal_angle + threshold:
+        # if need to change direction
+        if goto != direction:
+            direction = change_direction(direction, goto, publisher)
 
-            self.command_pub.publish(vel_msg)
+        (trans, rot) = listener.lookupTransform("/map", "/base_footprint", rospy.Time(0))
+        x, y = trans[0], trans[1]
+        euler_from_quaternion(rot)
+        currentX, currentY = x, y
+        x_g, y_g = point
+        left_or_right = 1
+        should_set_z = False
+
+        # move the robot
+        while not ((x_g - threshold < currentX and currentX < x_g + threshold) and (
+                y_g - threshold < currentY and currentY < y_g + threshold)):
+            direction = get_robot_direction()
+            if should_set_z:
+                move_msg.angular.z = ANGULAR_Z * left_or_right
+
+            publisher.publish(move_msg)
             (trans, rot) = listener.lookupTransform("/map", "/base_footprint", rospy.Time(0))
-            x, y = trans[0], trans[1]
+            currentX, currentY = trans[0], trans[1]
             (roll, pitch, yaw) = euler_from_quaternion(rot)
-            if wantedDirection == UP:
-                if -3.2 <= yaw <= - 3.1:
-                    break
+
+            if yaw < dict_to_angle(goto):
+                left_or_right = 1
+                should_set_z = True
+            else:
+                left_or_right = -1
+                should_set_z = True
+
+
+def change_direction(direction, goto, publisher):
+    rotate(direction, goto, publisher)
+    direction = goto
+    update_yaw(direction, publisher)
+    return direction
+
+
+def rotate(current_way, wanted_way, publisher):
+    threshold = 0.15
+    vel_msg = Twist()
+    new_angle = dict_to_angle(wanted_way)
+    decide_left_or_right = new_angle - dict_to_angle(current_way)
+    # check if should turn to the left or to the right
+    if decide_left_or_right < 0:
+        left_or_right = -1
+    else:
+        left_or_right = 1
+
+    # turn z
+    vel_msg.angular.z = TURN * left_or_right
+    (trans, rot) = listener.lookupTransform("/map", "/base_footprint", rospy.Time(0))
+    (roll, pitch, yaw) = euler_from_quaternion(rot)
+    # turn until were ready to go
+    while not new_angle - threshold < yaw and yaw < new_angle + threshold:
+        publisher.publish(vel_msg)
+        (trans, rot) = listener.lookupTransform("/map", "/base_footprint", rospy.Time(0))
+        (roll, pitch, yaw) = euler_from_quaternion(rot)
+        if wanted_way == UP:
+            if -3.2 <= yaw and yaw <= - 3.1:
+                break
 
 
 if __name__ == '__main__':
-    # initialize node
-    rospy.init_node('navigation_task_node')
-    # set the parameter size
-    if rospy.has_param('/robot_size'):
-        robot_size = rospy.get_param('/robot_size')
-    else:
-        robot_size = 0.35
-
-    listener = tf.TransformListener()
-    rate = rospy.Rate(2)
-    listener.waitForTransform("/map", "/base_footprint", rospy.Time(0), rospy.Duration(10.0))
-    # run
-    s = rospy.Service('navigate', navigate, navigationFunc)
-    rospy.spin()
+    main()
